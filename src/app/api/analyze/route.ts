@@ -1,145 +1,87 @@
-import { OpenAI } from 'openai';
+const fraudIndicators = [
+  { pattern: /guaranteed\s+return|guaranteed\s+profit|unusually\s+high\s+returns/i, score: 30, title: "Guaranteed returns", severity: "HIGH", explanation: "Guaranteed or unusually high returns are a common warning sign in fraudulent investment messages." },
+  { pattern: /otp|pin|password|credentials/i, score: 30, title: "Sensitive credential request", severity: "HIGH", explanation: "Requests for OTPs, PINs, passwords, or banking credentials are common in fraudulent messages." },
+  { pattern: /payment|transfer\s+request|send\s+money/i, score: 25, title: "Payment request", severity: "HIGH", explanation: "Requests to transfer money are common in fraudulent investment messages." },
+  { pattern: /sebi|bank|government\s+organization/i, score: 25, title: "Impersonation", severity: "HIGH", explanation: "Impersonation of regulatory bodies or financial institutions is a common fraud tactic." },
+  { pattern: /risk-free|no-risk/i, score: 25, title: "Risk-free claim", severity: "MEDIUM", explanation: "Risk-free or no-risk claims are common in fraudulent investment messages." },
+  { pattern: /unusually\s+high\s+return/i, score: 25, title: "Unusually high return", severity: "MEDIUM", explanation: "Unusually high returns are a common warning sign in fraudulent investment messages." },
+  { pattern: /suspicious\s+link|account\s+verification\s+link/i, score: 20, title: "Suspicious link", severity: "MEDIUM", explanation: "Suspicious links or account verification requests are common in fraudulent messages." },
+  { pattern: /urgent|act\s+immediately|limited\s+time|limited\s+slots/i, score: 15, title: "Urgency", severity: "MEDIUM", explanation: "Urgency tactics are common in fraudulent investment messages." }
+];
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const safeActions = [
+  "Do not transfer money based solely on this message.",
+  "Do not share OTPs, PINs, passwords, or banking credentials.",
+  "Avoid clicking suspicious links.",
+  "Verify the organization independently using official contact information.",
+  "If fraud is suspected, use appropriate official reporting channels."
+];
 
-const systemPrompt = `You are ScamLens, an AI-powered fraud detection system for investment-related messages. Analyze the provided text and identify potential fraud indicators.
+const educationalSafeActions = [
+  "Understand the investment product thoroughly before making a decision.",
+  "Consider the associated risks, costs, and disclosures.",
+  "Seek advice from a registered financial advisor if needed."
+];
 
-IMPORTANT: You are NOT providing investment advice. You are only identifying potential fraud indicators and providing safety guidance.
+function analyzeMessage(message: string) {
+  let score = 0;
+  const redFlags = [];
 
-Return your analysis in STRICT JSON format with the following structure:
-{
-  "riskLevel": "LOW | MEDIUM | HIGH",
-  "riskScore": 0-100,
-  "summary": "A brief explanation of the analysis",
-  "redFlags": [
-    {
-      "title": "Short descriptive title of the red flag",
-      "severity": "LOW | MEDIUM | HIGH",
-      "evidence": "Exact or short excerpt from the message that shows this indicator",
-      "explanation": "Why this may be suspicious and what to look for"
+  for (const indicator of fraudIndicators) {
+    if (indicator.pattern.test(message)) {
+      const match = message.match(indicator.pattern);
+      if (match) {
+        score += indicator.score;
+        redFlags.push({
+          title: indicator.title,
+          severity: indicator.severity,
+          evidence: match[0],
+          explanation: indicator.explanation
+        });
+      }
     }
-  ],
-  "safeActions": [
-    "Action item 1",
-    "Action item 2",
-    "Action item 3"
-  ],
-  "disclaimer": "This analysis identifies potential fraud indicators and does not provide investment advice."
+  }
+
+  // Cap score at 100
+  score = Math.min(score, 100);
+
+  let riskLevel = "LOW";
+  if (score >= 50) {
+    riskLevel = "HIGH";
+  } else if (score >= 25) {
+    riskLevel = "MEDIUM";
+  }
+
+  let summary = "This message appears to be a normal financial education message.";
+  if (riskLevel !== "LOW") {
+    summary = `This message contains potential fraud indicators. It has characteristics commonly associated with investment scams. Verify independently before taking action.`;
+  }
+
+  return {
+    riskLevel,
+    riskScore: score,
+    summary,
+    redFlags,
+    safeActions: riskLevel === "LOW" ? educationalSafeActions : safeActions,
+    disclaimer: "ScamLens identifies potential fraud indicators. It does not provide investment advice, stock recommendations, or predictions."
+  };
 }
-
-Look for these common fraud indicators:
-- Guaranteed or unusually high returns
-- Urgency or pressure to act immediately
-- Impersonation of SEBI, banks, government organizations, brokers
-- Requests for OTP, PIN, passwords or sensitive credentials
-- Requests to transfer money to unusual accounts
-- Suspicious payment instructions
-- Fake authority claims
-- Suspicious links/domains
-- Fake investment schemes
-- Promises of risk-free profits
-- Social engineering tactics
-- Fear or urgency tactics
-- Requests to communicate through unofficial channels
-
-Use cautious language like:
-- "potential fraud indicators"
-- "high-risk characteristics"
-- "appears suspicious"
-- "verify independently"
-
-NEVER automatically label something as a confirmed scam. Always use language that indicates this is an analysis of potential risks.`;
 
 export async function POST(request: Request) {
   try {
     const { message } = await request.json();
 
-    if (!message || typeof message !== 'string') {
+    if (!message || typeof message !== 'string' || message.trim() === '') {
       return Response.json(
-        { error: 'Message is required and must be a string' },
+        { error: 'Message is required and must be a non-empty string' },
         { status: 400 }
       );
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      // Return mock response if API key is not configured
-      return Response.json({
-        riskLevel: "MEDIUM",
-        riskScore: 65,
-        summary: "Unable to perform AI analysis. Please configure OpenAI API key for full analysis.",
-        redFlags: [
-          {
-            title: "Analysis Limited",
-            severity: "MEDIUM",
-            evidence: "No API key configured",
-            explanation: "AI analysis requires OpenAI API key configuration for full fraud detection capabilities."
-          }
-        ],
-        safeActions: [
-          "Be cautious with any investment opportunity",
-          "Verify through official channels",
-          "Seek advice from registered financial advisors"
-        ],
-        disclaimer: "This analysis identifies potential fraud indicators and does not provide investment advice."
-      });
-    }
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: `Analyze this investment-related message for potential fraud indicators:\n\n${message}`,
-        },
-      ],
-      temperature: 0.3,
-      max_tokens: 1000,
-    });
-
-    const response = completion.choices[0]?.message?.content;
-
-    if (!response) {
-      throw new Error('No response from OpenAI');
-    }
-
-    try {
-      // Parse the JSON response
-      const parsed = JSON.parse(response);
-      return Response.json(parsed);
-    } catch (parseError) {
-      console.error('Failed to parse OpenAI response:', parseError);
-
-      // Fallback to a structured response if parsing fails
-      return Response.json({
-        riskLevel: "MEDIUM",
-        riskScore: 50,
-        summary: "Unable to fully analyze the message due to processing error.",
-        redFlags: [
-          {
-            title: "Processing Error",
-            severity: "MEDIUM",
-            evidence: "Message analysis incomplete",
-            explanation: "The system encountered an error while analyzing this message."
-          }
-        ],
-        safeActions: [
-          "Be cautious with the message content",
-          "Verify information through official sources",
-          "Seek professional advice if needed"
-        ],
-        disclaimer: "This analysis identifies potential fraud indicators and does not provide investment advice."
-      });
-    }
+    const analysis = analyzeMessage(message);
+    return Response.json(analysis);
   } catch (error) {
     console.error('Error in analysis:', error);
-
-    // Return a safe error response
     return Response.json({
       riskLevel: "MEDIUM",
       riskScore: 40,
@@ -157,7 +99,7 @@ export async function POST(request: Request) {
         "Check your internet connection",
         "Contact support if the issue persists"
       ],
-      disclaimer: "This analysis identifies potential fraud indicators and does not provide investment advice."
+      disclaimer: "ScamLens identifies potential fraud indicators. It does not provide investment advice, stock recommendations, or predictions."
     }, { status: 500 });
   }
 }
